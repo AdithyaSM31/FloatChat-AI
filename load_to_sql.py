@@ -9,14 +9,15 @@ load_dotenv()
 
 # --- DATABASE CONNECTION DETAILS ---
 # Uses environment variables for Railway deployment
-DATABASE_URL = os.getenv('DATABASE_URL')
+# Railway provides DATABASE_PUBLIC_URL (for external access) and DATABASE_URL (internal only)
+DATABASE_URL = os.getenv('DATABASE_PUBLIC_URL') or os.getenv('DATABASE_URL')
 
 if DATABASE_URL:
     # Railway uses postgres:// but SQLAlchemy needs postgresql://
     if DATABASE_URL.startswith('postgres://'):
         DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
     engine_string = DATABASE_URL
-    print("Using DATABASE_URL from Railway")
+    print(f"Using DATABASE_URL from Railway (public: {bool(os.getenv('DATABASE_PUBLIC_URL'))})")
 else:
     # Fallback to manual construction for local development
     db_user = os.getenv('DB_USER', 'postgres')

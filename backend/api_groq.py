@@ -51,15 +51,16 @@ app.add_middleware(
 )
 
 # --- 2. DATABASE CONNECTION ---
-# Railway provides DATABASE_URL, use it if available
-DATABASE_URL = os.getenv('DATABASE_URL')
+# Railway provides DATABASE_PUBLIC_URL and DATABASE_URL
+# DATABASE_PUBLIC_URL works from anywhere, DATABASE_URL only works within Railway's private network
+DATABASE_URL = os.getenv('DATABASE_PUBLIC_URL') or os.getenv('DATABASE_URL')
 
 if DATABASE_URL:
     # Railway uses postgres:// but SQLAlchemy needs postgresql://
     if DATABASE_URL.startswith('postgres://'):
         DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
     engine_string = DATABASE_URL
-    logger.info("Using DATABASE_URL from Railway")
+    logger.info(f"Using DATABASE_URL from Railway (public: {bool(os.getenv('DATABASE_PUBLIC_URL'))})")
 else:
     # Fallback to manual construction for local development
     DB_USER = os.getenv('DB_USER', 'postgres')
