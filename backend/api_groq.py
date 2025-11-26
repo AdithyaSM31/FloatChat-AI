@@ -51,12 +51,40 @@ app.add_middleware(
 )
 
 # --- 2. DATABASE CONNECTION ---
-DB_USER = os.getenv('DB_USER', 'postgres')
-DB_HOST = os.getenv('DB_HOST', 'localhost')
-DB_PORT = os.getenv('DB_PORT', '5432')
-DB_NAME = os.getenv('DB_NAME', 'argo_db')
-engine_string = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-engine = create_engine(engine_string)
+# Railway provides DATABASE_URL, use it if available
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+if DATABASE_URL:
+    # Railway uses postgres:// but SQLAlchemy needs postgresql://
+    if DATABASE_URL.startswith('postgres://'):
+        DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+    engine_string = DATABASE_URL
+    logger.info("Using DATABASE_URL from Railway")
+else:
+    # Fallback to manual construction for local development
+    DB_USER = os.getenv('DB_USER', 'postgres')
+    DB_HOST = os.getenv('DB_HOST', 'localhost')
+    DB_PORT = os.getenv('DB_PORT', '5432')
+    DB_NAME = os.getenv('DB_NAME', 'argo_db')
+    engine_string = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    logger.info("Using manual database configuration")
+
+# Create engine with connection pooling and better timeout settings
+engine = create_engine(
+    engine_string,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=3600,  # Recycle connections after 1 hour
+    pool_pre_ping=True,  # Test connections before using them
+    connect_args={
+        'connect_timeout': 10,
+        'keepalives': 1,
+        'keepalives_idle': 30,
+        'keepalives_interval': 10,
+        'keepalives_count': 5,
+    }
+)
 
 def run_query(query_string: str) -> pd.DataFrame:
     """Executes a SQL query and returns the result as a pandas DataFrame."""
@@ -71,11 +99,20 @@ def run_query(query_string: str) -> pd.DataFrame:
 def get_db_context():
     """Fetches schema, date range, and unique floats to give the AI better context."""
     try:
-        schema_query = "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'argo_data'"
-        date_range_query = "SELECT MIN(juld)::date AS min_date, MAX(juld)::date AS max_date FROM argo_data;"
-        platform_query = "SELECT DISTINCT platform_number FROM argo_data ORDER BY platform_number;"
+        # Check if argo_data table exists first
+        table_check_query = "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'argo_data');"
         
         with engine.connect() as connection:
+            table_exists = pd.read_sql(text(table_check_query), connection).iloc[0, 0]
+            
+            if not table_exists:
+                logger.warning("argo_data table does not exist in database")
+                return "Database table 'argo_data' not found. Please ensure data is loaded."
+            
+            schema_query = "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'argo_data'"
+            date_range_query = "SELECT MIN(juld)::date AS min_date, MAX(juld)::date AS max_date FROM argo_data;"
+            platform_query = "SELECT DISTINCT platform_number FROM argo_data ORDER BY platform_number LIMIT 10;"
+            
             schema_df = pd.read_sql(text(schema_query), connection)
             date_range_df = pd.read_sql(text(date_range_query), connection)
             platform_df = pd.read_sql(text(platform_query), connection)
@@ -92,12 +129,18 @@ def get_db_context():
         - {date_range_info}
         - {platform_info}
         """
+        logger.info("✅ Database context loaded successfully")
         return full_context
     except Exception as e:
-        logger.error(f"Error fetching DB context: {e}")
-        return "Database context could not be loaded."
+        logger.error(f"❌ Error fetching DB context: {e}")
+        return "Database context could not be loaded. Using fallback context."
 
-DB_CONTEXT = get_db_context()
+# Initialize DB context with error handling
+try:
+    DB_CONTEXT = get_db_context()
+except Exception as e:
+    logger.error(f"Failed to initialize DB context on startup: {e}")
+    DB_CONTEXT = "Database context initialization failed. Queries may not work correctly."
 
 # --- 4. RAG & CORE AI LOGIC ---
 def find_relevant_context(user_question: str) -> str:
