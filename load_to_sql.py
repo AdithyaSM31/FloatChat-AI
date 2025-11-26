@@ -47,20 +47,52 @@ if 'platform_number' in df.columns and df['platform_number'].dtype == 'object':
 
 print(f"Successfully loaded {len(df)} rows.")
 
-# Create the engine
-engine = create_engine(engine_string)
-
-print(f"Connecting to database '{db_name}' at {db_host}:{db_port} and loading data into table '{table_name}'...")
-
-# Use df.to_sql to load the data
-# if_exists='replace': Deletes the old table and creates a new one. Good for re-running the script.
-# chunksize: Loads data in batches of 1000 rows to avoid using too much memory.
-df.to_sql(
-    table_name,
-    con=engine,
-    if_exists='replace',
-    index=False,
-    chunksize=1000
+# Create the engine with connection pooling and retry logic
+engine = create_engine(
+    engine_string,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=3600,
+    pool_pre_ping=True,
+    connect_args={
+        'connect_timeout': 30,
+        'keepalives': 1,
+        'keepalives_idle': 30,
+        'keepalives_interval': 10,
+        'keepalives_count': 5,
+    }
 )
 
-print("SUCCESS: Data has been loaded into the PostgreSQL database.")
+print(f"Connecting to database and loading data into table '{table_name}'...")
+print("This may take several minutes for 1.3 million rows...")
+
+# Use df.to_sql to load the data with progress updates
+# if_exists='replace': Deletes the old table and creates a new one. Good for re-running the script.
+# chunksize: Loads data in batches of 5000 rows
+import time
+start_time = time.time()
+
+try:
+    df.to_sql(
+        table_name,
+        con=engine,
+        if_exists='replace',
+        index=False,
+        chunksize=5000,  # Increased chunk size for faster loading
+        method='multi'  # Use multi-row insert for better performance
+    )
+    
+    elapsed_time = time.time() - start_time
+    print(f"\n✅ SUCCESS: Data has been loaded into the PostgreSQL database!")
+    print(f"   Total rows: {len(df):,}")
+    print(f"   Time taken: {elapsed_time:.2f} seconds")
+    print(f"   Average: {len(df)/elapsed_time:.0f} rows/second")
+    
+except Exception as e:
+    print(f"\n❌ ERROR: Failed to load data: {e}")
+    print("\nTroubleshooting:")
+    print("1. Check if Railway PostgreSQL is running (not sleeping)")
+    print("2. Verify the DATABASE_PUBLIC_URL is correct")
+    print("3. Check Railway dashboard for database status")
+    raise
